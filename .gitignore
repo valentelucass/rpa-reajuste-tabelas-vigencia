@@ -1,0 +1,41 @@
+# Segredos e configuracao local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Dados locais e sensiveis gerados pela automacao
+backups/
+logs/
+reports/
+rpa-icons/
+src/auto_delete_clientes/logs/
+src/auto_delete_clientes/reprocessar.xlsx
+
+# Build e empacotamento
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.tmp_pytest/
+.venv/
+venv/
+
+# IDE e sistema operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporarios e copias locais
+*.bak
+*.tmp
+*.temp
+*.orig
