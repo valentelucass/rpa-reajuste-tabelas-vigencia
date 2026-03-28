@@ -22,7 +22,7 @@ def _checkpoint(tmp_path, monkeypatch):
     return gestor_checkpoint_mod.GestorCheckpoint.carregar_ou_criar(caminho_excel)
 
 
-def test_obter_tabelas_para_execucao_fase_dois_considera_fase_um_ok(tmp_path, monkeypatch):
+def test_obter_tabelas_para_execucao_fase_dois_nao_depende_da_fase_um_local(tmp_path, monkeypatch):
     checkpoint = _checkpoint(tmp_path, monkeypatch)
     tabelas = [_tabela("T1"), _tabela("T2"), _tabela("T3")]
     checkpoint.sincronizar_tabelas(tabelas)
@@ -34,7 +34,24 @@ def test_obter_tabelas_para_execucao_fase_dois_considera_fase_um_ok(tmp_path, mo
 
     itens = checkpoint.obter_tabelas_para_execucao(FaseExecucao.FASE_2, tabelas)
 
-    assert [(indice, tabela.nome) for indice, tabela in itens] == [(3, "T3")]
+    assert [(indice, tabela.nome) for indice, tabela in itens] == [(2, "T2"), (3, "T3")]
+
+
+def test_obter_tabelas_para_execucao_fase_dois_somente_falhas_retorna_itens_com_erro(tmp_path, monkeypatch):
+    checkpoint = _checkpoint(tmp_path, monkeypatch)
+    tabelas = [_tabela("T1"), _tabela("T2"), _tabela("T3")]
+    checkpoint.sincronizar_tabelas(tabelas)
+
+    checkpoint.registrar_resultado(FaseExecucao.FASE_2, 1, "T1", StatusExecucao.ERRO.value)
+    checkpoint.registrar_resultado(FaseExecucao.FASE_2, 2, "T2", StatusExecucao.SUCESSO.value)
+
+    itens = checkpoint.obter_tabelas_para_execucao(
+        FaseExecucao.FASE_2,
+        tabelas,
+        somente_falhas=True,
+    )
+
+    assert [(indice, tabela.nome) for indice, tabela in itens] == [(1, "T1")]
 
 
 def test_pode_marcar_fase_completa_respeita_itens_elegiveis(tmp_path, monkeypatch):

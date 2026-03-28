@@ -37,6 +37,7 @@ from src.servicos.gestor_ocorrencias import GestorOcorrenciasProcessamento
 from src.servicos.leitor_excel import LeitorExcel
 from src.servicos.processador_fase_dois import ProcessadorFaseDois, RelatorioFaseDois
 from src.servicos.processador_fase_um import ProcessadorFaseUm
+from src.servicos.validador_elegibilidade_fase_dois import ValidadorElegibilidadeFaseDois
 
 
 class AutomacaoTabelaCliente:
@@ -81,6 +82,7 @@ class AutomacaoTabelaCliente:
         self.aplicador: Optional[AplicadorReajuste] = None
         self.processador_f1: Optional[ProcessadorFaseUm] = None
         self.processador_f2: Optional[ProcessadorFaseDois] = None
+        self.validador_f2: Optional[ValidadorElegibilidadeFaseDois] = None
 
         # Relatorio da Fase 2 (preenchido apos execucao)
         self._relatorio_fase_dois: Optional[dict] = None
@@ -153,8 +155,6 @@ class AutomacaoTabelaCliente:
         Wrapper que delega para executar(modo=MODO_FASE2).
         Mantido para compatibilidade com run_phase2_validation.py.
         """
-        relatorios_grupo: list[RelatorioFaseDois] = []
-
         try:
             config.recarregar_configuracoes(sobrescrever_env=True)
             self._validar_pre_requisitos()
@@ -183,68 +183,10 @@ class AutomacaoTabelaCliente:
                 self.pagina_login.abrir()
                 self.pagina_login.autenticar()
 
-            self.observador.registrar_sistema("Iniciando Fase 2: aplicacao de reajuste")
-
             itens_fase_dois = self._obter_itens_para_execucao(FaseExecucao.FASE_2, tabelas)
-            if not itens_fase_dois:
-                mensagem = self._mensagem_sem_itens_fase_dois()
-                self.logger.error(mensagem)
-                self.observador.registrar_sistema(mensagem)
-                raise RuntimeError(mensagem)
-
-            for grupo in self._agrupar_itens_fase_dois(itens_fase_dois):
-                data_inicio = grupo["data_inicio"]
-                data_fim = grupo["data_fim"]
-                itens_grupo = grupo["itens"]
-                percentual = itens_grupo[0][1].percentual if itens_grupo else 0.0
-
-                with self.rastreador.etapa(
-                    "preparar_fase_dois",
-                    "Preparando filtros da Fase 2",
-                    {"data_inicio": data_inicio, "data_fim": data_fim, "quantidade_nomes": len(itens_grupo)},
-                ):
-                    self.pagina_tabelas.preparar_estado_listagem_fase_dois(data_inicio, data_fim)
-                    filtro_vigencia = self.pagina_tabelas.obter_valor_filtro_vigencia()
-                    total_copias = self.pagina_tabelas.obter_total_tabelas()
-
-                if not self.pagina_tabelas.ha_resultados_filtrados():
-                    mensagem = (
-                        "Fase 2 abortada: nenhum resultado encontrado apos aplicar o filtro "
-                        f"de vigencia {data_inicio} - {data_fim}."
-                    )
-                    self.logger.error(mensagem)
-                    self.observador.registrar_sistema(mensagem)
-                    relatorio_vazio = RelatorioFaseDois(
-                        run_id=self.run_id,
-                        filtro_vigencia=filtro_vigencia or f"{data_inicio} - {data_fim}",
-                        percentual=percentual,
-                        total_registros_filtrados=total_copias,
-                    )
-                    relatorio_vazio.validar_consistencia()
-                    relatorios_grupo.append(relatorio_vazio)
-                    break
-
-                relatorios_grupo.append(
-                    self.processador_f2.processar(
-                        itens_grupo,
-                        componentes,
-                        self.run_id,
-                        total_copias,
-                        filtro_vigencia,
-                        data_inicio,
-                        data_fim,
-                        checkpoint=self.checkpoint,
-                    )
-                )
-
-            if not relatorios_grupo and self.processador_f2 and self.processador_f2.ultimo_relatorio:
-                relatorios_grupo.append(self.processador_f2.ultimo_relatorio)
-
-            relatorio_final = self._consolidar_relatorio_fase_dois(relatorios_grupo)
-            caminho_json, caminho_md = self._salvar_relatorio_fase_dois(relatorio_final)
-            relatorio_final["artefatos"] = self._artefatos_fase_dois(caminho_json, caminho_md)
+            relatorio_final = self._executar_fase_dois_interna(itens_fase_dois, componentes)
             self._registrar_alertas_analise()
-            return relatorio_final
+            return relatorio_final or {}
 
         except Exception as erro:
             tb = traceback.format_exc()
@@ -253,14 +195,6 @@ class AutomacaoTabelaCliente:
             if self.rastreador:
                 self.rastreador.registrar_erro(erro, tb=tb)
             self.observador.registrar_sistema(f"Erro critico: {erro}")
-
-            if self.processador_f2 and self.processador_f2.ultimo_relatorio:
-                relatorios_grupo = [self.processador_f2.ultimo_relatorio]
-            if relatorios_grupo:
-                relatorio_final = self._consolidar_relatorio_fase_dois(relatorios_grupo)
-                relatorio_final["erro_critico"] = str(erro)
-                caminho_json, caminho_md = self._salvar_relatorio_fase_dois(relatorio_final)
-                relatorio_final["artefatos"] = self._artefatos_fase_dois(caminho_json, caminho_md)
             raise
 
         finally:
@@ -297,40 +231,103 @@ class AutomacaoTabelaCliente:
         itens: list[tuple[int, object]],
         componentes: list,
         tipo_execucao: TipoExecucao = TipoExecucao.NORMAL,
-    ) -> None:
-        """Executa a Fase 2: aplicação de reajuste (fluxo simples sem agrupamento)."""
+    ) -> dict:
+        """Executa a Fase 2 com pre-validacao por grupo de vigencia."""
         if not itens:
             self.observador.definir_total_fase_dois(0)
             mensagem = self._mensagem_sem_itens_fase_dois()
             self.observador.registrar_sistema(mensagem)
-            if self.modo == ModoExecucao.MODO_FASE2 and tipo_execucao == TipoExecucao.NORMAL:
-                raise RuntimeError(mensagem)
-            return
+            relatorio_final = self._finalizar_relatorio_fase_dois([])
+            self._emitir_alerta_sem_elegiveis(relatorio_final)
+            return relatorio_final
 
-        primeira_tabela = itens[0][1]
-        self.observador.registrar_sistema("Iniciando Fase 2: aplicação de reajuste")
-        with self.rastreador.etapa("preparar_fase_dois", "Preparando filtros da Fase 2"):
-            data_inicio = primeira_tabela.data_inicio
-            data_fim = primeira_tabela.data_fim
-            self.pagina_tabelas.preparar_estado_listagem_fase_dois(data_inicio, data_fim)
-            filtro_vigencia = self.pagina_tabelas.obter_valor_filtro_vigencia()
-            total_copias = self.pagina_tabelas.obter_total_tabelas()
-            if not self.pagina_tabelas.ha_resultados_filtrados():
-                raise RuntimeError(
-                    "Fase 2 abortada: nenhum resultado encontrado apos aplicar o filtro de vigencia."
+        self.observador.registrar_sistema(
+            "Iniciando Fase 2: validacao de elegibilidade no site e aplicacao de reajuste"
+        )
+        relatorios_grupo: list[RelatorioFaseDois] = []
+        try:
+            for grupo in self._agrupar_itens_fase_dois(itens):
+                data_inicio = grupo["data_inicio"]
+                data_fim = grupo["data_fim"]
+                itens_grupo = grupo["itens"]
+                percentual = itens_grupo[0][1].percentual if itens_grupo else 0.0
+
+                with self.rastreador.etapa(
+                    "validar_elegibilidade_fase_dois",
+                    "Validando elegibilidade da Fase 2 no site",
+                    {
+                        "data_inicio": data_inicio,
+                        "data_fim": data_fim,
+                        "quantidade_itens_excel": len(itens_grupo),
+                        "modo_validacao": config.FASE2_VALIDACAO_MODO,
+                    },
+                ):
+                    pre_validacao = self.validador_f2.validar_grupo(
+                        itens_grupo,
+                        self.run_id,
+                        data_inicio,
+                        data_fim,
+                        checkpoint=self.checkpoint,
+                        tipo_execucao=tipo_execucao,
+                    )
+
+                relatorio_grupo = RelatorioFaseDois(
+                    run_id=self.run_id,
+                    filtro_vigencia=pre_validacao.filtro_vigencia,
+                    percentual=percentual,
+                    pre_validacao=pre_validacao.to_dict(),
+                    total_registros_filtrados=pre_validacao.total_registros_filtrados,
                 )
 
-        self.processador_f2.processar(
-            itens,
-            componentes,
-            self.run_id,
-            total_copias,
-            filtro_vigencia,
-            data_inicio,
-            data_fim,
-            checkpoint=self.checkpoint,
-            tipo_execucao=tipo_execucao,
-        )
+                itens_elegiveis_confirmados = pre_validacao.itens_elegiveis()
+                if not itens_elegiveis_confirmados:
+                    relatorio_grupo.validar_consistencia()
+                    relatorios_grupo.append(relatorio_grupo)
+                    self.observador.registrar_sistema(
+                        "Grupo sem elegiveis na Fase 2: "
+                        f"{pre_validacao.filtro_vigencia} | "
+                        f"validados={pre_validacao.total_validados} | "
+                        f"divergentes={pre_validacao.total_divergentes} | "
+                        f"nao_encontrados={pre_validacao.total_nao_encontrados}"
+                    )
+                    continue
+
+                with self.rastreador.etapa(
+                    "processar_itens_elegiveis",
+                    "Processando grupo elegivel da Fase 2",
+                    {
+                        "data_inicio": data_inicio,
+                        "data_fim": data_fim,
+                        "quantidade_grupo": len(itens_grupo),
+                        "quantidade_elegiveis_confirmados": len(itens_elegiveis_confirmados),
+                        "quantidade_validados": pre_validacao.total_validados,
+                    },
+                ):
+                    relatorio_processamento = self.processador_f2.processar(
+                        itens_grupo,
+                        componentes,
+                        self.run_id,
+                        pre_validacao.total_registros_filtrados,
+                        pre_validacao.filtro_vigencia,
+                        data_inicio,
+                        data_fim,
+                        checkpoint=self.checkpoint,
+                        tipo_execucao=tipo_execucao,
+                    )
+
+                relatorio_processamento.pre_validacao = pre_validacao.to_dict()
+                relatorios_grupo.append(relatorio_processamento)
+
+            relatorio_final = self._finalizar_relatorio_fase_dois(relatorios_grupo)
+            self._emitir_alerta_sem_elegiveis(relatorio_final)
+            return relatorio_final
+        except Exception as erro:
+            relatorio_final = self._consolidar_relatorio_fase_dois(relatorios_grupo)
+            relatorio_final["erro_critico"] = str(erro)
+            caminho_json, caminho_md = self._salvar_relatorio_fase_dois(relatorio_final)
+            relatorio_final["artefatos"] = self._artefatos_fase_dois(caminho_json, caminho_md)
+            self._relatorio_fase_dois = relatorio_final
+            raise
 
     # ------------------------------------------------------------------
     # Composition Root
@@ -378,6 +375,13 @@ class AutomacaoTabelaCliente:
             self.observador,
             self.logger
         )
+        self.validador_f2 = ValidadorElegibilidadeFaseDois(
+            self.pagina_tabelas,
+            self.gestor,
+            self.observador,
+            self.rastreador,
+            self.logger,
+        )
 
     def _agrupar_tabelas_fase_dois(self, tabelas: list) -> list[dict]:
         """Mantido por compatibilidade: agrupa tabelas simples por vigencia."""
@@ -403,15 +407,26 @@ class AutomacaoTabelaCliente:
         tabelas_ignoradas: set[str] = set()
         itens_sem_log: set[str] = set()
         filtros = []
+        pre_validacoes = []
         total_registros_filtrados = 0
         total_encontradas = 0
         total_processadas = 0
         total_com_erro = 0
         ordem_valida = True
+        total_elegiveis_confirmados = 0
+        total_nao_encontrados = 0
+        total_nao_prontos = 0
+        total_duplicados = 0
+        total_divergentes = 0
+        total_ja_processados = 0
+        total_erros_tecnicos_validacao = 0
+        grupos_sem_elegiveis = 0
+        grupos_com_erro_tecnico = 0
 
         for relatorio in relatorios_grupo:
             relatorio.validar_consistencia()
             dados = relatorio.to_dict()
+            pre_validacao = dados.get("pre_validacao") or {}
             filtros.append({
                 "filtro_vigencia": dados["filtro_vigencia"],
                 "percentual": dados["percentual"],
@@ -420,6 +435,19 @@ class AutomacaoTabelaCliente:
                 "total_processadas": dados["total_processadas"],
                 "total_com_erro": dados["total_com_erro"],
             })
+            if pre_validacao:
+                pre_validacoes.append(pre_validacao)
+                total_elegiveis_confirmados += int(pre_validacao.get("total_elegiveis", 0))
+                total_nao_encontrados += int(pre_validacao.get("total_nao_encontrados", 0))
+                total_nao_prontos += int(pre_validacao.get("total_nao_prontos", 0))
+                total_duplicados += int(pre_validacao.get("total_duplicados", 0))
+                total_divergentes += int(pre_validacao.get("total_divergentes", 0))
+                total_ja_processados += int(pre_validacao.get("total_ja_processados", 0))
+                total_erros_tecnicos_validacao += int(pre_validacao.get("total_erros_tecnicos", 0))
+                if pre_validacao.get("decisao_final") in {"sem_elegiveis", "sem_resultados_no_site"}:
+                    grupos_sem_elegiveis += 1
+                if pre_validacao.get("decisao_final") == "erro_tecnico_validacao":
+                    grupos_com_erro_tecnico += 1
             detalhes.extend(dados["detalhamento"])
             tabelas_ignoradas.update(dados["tabelas_ignoradas"])
             itens_sem_log.update(dados["itens_sem_log"])
@@ -436,11 +464,20 @@ class AutomacaoTabelaCliente:
             and ordem_valida
             and not itens_sem_log
         )
+        if total_elegiveis_confirmados == 0 and pre_validacoes:
+            status_execucao = "concluido_com_alerta"
+        elif total_com_erro > 0 or total_erros_tecnicos_validacao > 0:
+            status_execucao = "concluido_com_alerta"
+        elif funcional:
+            status_execucao = "concluido"
+        else:
+            status_execucao = "concluido_parcial"
 
         return {
             "run_id": self.run_id,
             "fase": 2,
             "funcional": funcional,
+            "status_execucao": status_execucao,
             "resumo": {
                 "total_registros_filtrados": total_registros_filtrados,
                 "total_encontradas": total_encontradas,
@@ -449,10 +486,23 @@ class AutomacaoTabelaCliente:
             },
             "validacao": {
                 "filtro_aplicado": bool(filtros),
-                "resultados_encontrados": total_encontradas > 0,
+                "resultados_encontrados": any(
+                    pre.get("resultado_site") == "resultados_filtrados"
+                    for pre in pre_validacoes
+                ),
                 "execucao_ordenada": ordem_valida,
                 "itens_sem_log": sorted(itens_sem_log),
+                "total_elegiveis_confirmados": total_elegiveis_confirmados,
+                "total_nao_encontrados": total_nao_encontrados,
+                "total_nao_prontos": total_nao_prontos,
+                "total_duplicados": total_duplicados,
+                "total_divergentes": total_divergentes,
+                "total_ja_processados": total_ja_processados,
+                "total_erros_tecnicos_validacao": total_erros_tecnicos_validacao,
+                "grupos_sem_elegiveis": grupos_sem_elegiveis,
+                "grupos_com_erro_tecnico_validacao": grupos_com_erro_tecnico,
             },
+            "pre_validacao": pre_validacoes,
             "filtros_processados": filtros,
             "tabelas_ignoradas": sorted(tabelas_ignoradas),
             "detalhamento": detalhes,
@@ -484,25 +534,48 @@ class AutomacaoTabelaCliente:
     def _formatar_relatorio_fase_dois(self, relatorio: dict) -> str:
         """Gera uma versao Markdown enxuta do relatorio final."""
         resumo = relatorio["resumo"]
+        validacao = relatorio["validacao"]
         linhas = [
             "# Relatorio Fase 2",
             "",
             "## Resumo",
             f"- Run ID: {relatorio['run_id']}",
             f"- Funcional: {'SIM' if relatorio['funcional'] else 'NAO'}",
+            f"- Status execucao: {relatorio.get('status_execucao', 'desconhecido')}",
             f"- Total filtradas: {resumo['total_registros_filtrados']}",
             f"- Total encontradas: {resumo['total_encontradas']}",
             f"- Total processadas: {resumo['total_processadas']}",
             f"- Total com erro: {resumo['total_com_erro']}",
             "",
             "## Validacao",
-            f"- Filtro aplicado: {'SIM' if relatorio['validacao']['filtro_aplicado'] else 'NAO'}",
-            f"- Resultados encontrados: {'SIM' if relatorio['validacao']['resultados_encontrados'] else 'NAO'}",
-            f"- Execucao ordenada: {'SIM' if relatorio['validacao']['execucao_ordenada'] else 'NAO'}",
-            f"- Itens sem log: {', '.join(relatorio['validacao']['itens_sem_log']) or 'Nenhum'}",
+            f"- Filtro aplicado: {'SIM' if validacao['filtro_aplicado'] else 'NAO'}",
+            f"- Resultados encontrados: {'SIM' if validacao['resultados_encontrados'] else 'NAO'}",
+            f"- Execucao ordenada: {'SIM' if validacao['execucao_ordenada'] else 'NAO'}",
+            f"- Elegiveis confirmados: {validacao['total_elegiveis_confirmados']}",
+            f"- Nao encontrados: {validacao['total_nao_encontrados']}",
+            f"- Nao prontos: {validacao['total_nao_prontos']}",
+            f"- Duplicados: {validacao['total_duplicados']}",
+            f"- Divergentes: {validacao['total_divergentes']}",
+            f"- Ja processados localmente: {validacao['total_ja_processados']}",
+            f"- Erros tecnicos de validacao: {validacao['total_erros_tecnicos_validacao']}",
+            f"- Itens sem log: {', '.join(validacao['itens_sem_log']) or 'Nenhum'}",
+            "",
+            "## Pre-validacao por Grupo",
+        ]
+
+        for grupo in relatorio.get("pre_validacao", []):
+            linhas.append(
+                "- "
+                f"{grupo['filtro_vigencia']} | decisao={grupo['decisao_final']} | "
+                f"elegiveis={grupo['total_elegiveis']} | "
+                f"divergentes={grupo['total_divergentes']} | "
+                f"nao_encontrados={grupo['total_nao_encontrados']}"
+            )
+
+        linhas.extend([
             "",
             "## Detalhamento",
-        ]
+        ])
 
         for item in relatorio["detalhamento"]:
             linhas.append(
@@ -518,6 +591,31 @@ class AutomacaoTabelaCliente:
                 linhas.append(f"- {nome}")
 
         return "\n".join(linhas) + "\n"
+
+    def _finalizar_relatorio_fase_dois(self, relatorios_grupo: list[RelatorioFaseDois]) -> dict:
+        relatorio_final = self._consolidar_relatorio_fase_dois(relatorios_grupo)
+        caminho_json, caminho_md = self._salvar_relatorio_fase_dois(relatorio_final)
+        relatorio_final["artefatos"] = self._artefatos_fase_dois(caminho_json, caminho_md)
+        self._relatorio_fase_dois = relatorio_final
+        return relatorio_final
+
+    def _emitir_alerta_sem_elegiveis(self, relatorio_final: Optional[dict]) -> None:
+        if not relatorio_final:
+            return
+        validacao = relatorio_final.get("validacao", {})
+        total_elegiveis = int(validacao.get("total_elegiveis_confirmados", 0) or 0)
+        if total_elegiveis > 0:
+            return
+        mensagem = (
+            "Fase 2 concluida sem itens elegiveis apos validacao do site. "
+            f"Grupos sem elegiveis={validacao.get('grupos_sem_elegiveis', 0)} | "
+            f"nao_encontrados={validacao.get('total_nao_encontrados', 0)} | "
+            f"divergentes={validacao.get('total_divergentes', 0)} | "
+            f"erros_tecnicos_validacao={validacao.get('total_erros_tecnicos_validacao', 0)}"
+        )
+        if self.logger:
+            self.logger.warning(mensagem)
+        self.observador.registrar_sistema(mensagem)
 
     # ------------------------------------------------------------------
     # Reprocessamento individual (chamado pela UI)
@@ -721,9 +819,9 @@ class AutomacaoTabelaCliente:
     @staticmethod
     def _mensagem_sem_itens_fase_dois() -> str:
         return (
-            "Nenhum item elegivel para Fase 2 no checkpoint atual. "
-            "A Fase 2 so processa registros com Fase 1 concluida e "
-            "Fase 2 pendente ou com erro."
+            "Nenhum item pendente para validacao da Fase 2 nesta execucao. "
+            "Os itens do Excel ja podem ter sido processados localmente ou "
+            "nao ha mais linhas disponiveis para validar."
         )
 
     def solicitar_parada_emergencial(self) -> None:

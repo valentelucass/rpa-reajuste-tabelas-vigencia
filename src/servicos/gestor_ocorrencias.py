@@ -117,6 +117,7 @@ class GestorOcorrenciasProcessamento:
             run_id=run_id,
             fase=FaseExecucao.from_valor(fase),
             tipo_execucao=tipo_execucao,
+            tipo_registro="processamento",
             pagina=pagina,
             linha=indice,
             nome_tabela=nome_tabela,
@@ -162,6 +163,7 @@ class GestorOcorrenciasProcessamento:
             run_id=run_id,
             fase=FaseExecucao.from_valor(fase),
             tipo_execucao=tipo_execucao,
+            tipo_registro="processamento",
             pagina=pagina,
             linha=indice,
             nome_tabela=nome_tabela,
@@ -187,6 +189,71 @@ class GestorOcorrenciasProcessamento:
         )
         self.logger.error(traceback.format_exc())
         return erro
+
+    def registrar_validacao(
+        self,
+        run_id: str,
+        indice: int,
+        nome_tabela: str,
+        *,
+        decisao_elegibilidade: str,
+        motivo_decisao: str,
+        grupo_vigencia: str,
+        status_site: str = "",
+        assinatura_site: str = "",
+        amostrado: bool = False,
+        janela_validacao: str = "",
+        origem_decisao: str = "site",
+        tipo_execucao: TipoExecucao = TipoExecucao.NORMAL,
+        tentativas: int = 1,
+        timestamp_inicio: str = "",
+        timestamp_fim: str = "",
+        duracao_ms: float = 0.0,
+        status_fase_1: str = StatusExecucao.PENDENTE.value,
+        status_fase_2: str = StatusExecucao.PENDENTE.value,
+    ) -> None:
+        status_registro = self._status_validacao(decisao_elegibilidade)
+        registro = RegistroProcessamento(
+            run_id=run_id,
+            fase=FaseExecucao.FASE_2,
+            tipo_execucao=tipo_execucao,
+            tipo_registro="validacao",
+            pagina=1,
+            linha=indice,
+            nome_tabela=nome_tabela,
+            status=status_registro,
+            mensagem=(motivo_decisao or decisao_elegibilidade)[:500],
+            timestamp_inicio=timestamp_inicio or agora_iso(),
+            timestamp_fim=timestamp_fim or agora_iso(),
+            duracao_ms=int(round(duracao_ms or 0.0)),
+            tentativas=tentativas,
+            erro_tipo="validacao" if status_registro == StatusExecucao.ERRO.value else "",
+            reprocessado=(tipo_execucao == TipoExecucao.REPROCESSAMENTO),
+            status_fase_1=status_fase_1,
+            status_fase_2=status_fase_2,
+            grupo_vigencia=grupo_vigencia,
+            decisao_elegibilidade=decisao_elegibilidade,
+            motivo_decisao=(motivo_decisao or "")[:500],
+            status_site=status_site[:200],
+            assinatura_site=assinatura_site[:300],
+            amostrado=amostrado,
+            janela_validacao=janela_validacao[:60],
+            origem_decisao=origem_decisao[:60],
+        )
+        self._gravar_csv(registro)
+
+        mensagem = (
+            "[fase_2][validacao] "
+            f"linha={indice} tabela={nome_tabela} decisao={decisao_elegibilidade} "
+            f"status={status_registro} grupo={grupo_vigencia or '-'} "
+            f"janela={janela_validacao or '-'} amostrado={str(amostrado).lower()}"
+        )
+        if status_registro == StatusExecucao.ERRO.value:
+            self.logger.error(mensagem)
+        elif status_registro == "alerta":
+            self.logger.warning(mensagem)
+        else:
+            self.logger.info(mensagem)
 
     def _gravar_csv(self, registro: RegistroProcessamento) -> None:
         try:
@@ -303,6 +370,16 @@ class GestorOcorrenciasProcessamento:
 
     def recuperar_interface_apos_erro(self) -> None:
         self.recuperar_interface()
+
+    @staticmethod
+    def _status_validacao(decisao_elegibilidade: str) -> str:
+        if decisao_elegibilidade == "elegivel":
+            return "validado"
+        if decisao_elegibilidade == "ja_processado_fase_2":
+            return "validado"
+        if decisao_elegibilidade == "erro_tecnico_validacao":
+            return StatusExecucao.ERRO.value
+        return "alerta"
 
     def _tentar_fechar_modal_botao(self) -> None:
         from selenium.webdriver.common.by import By

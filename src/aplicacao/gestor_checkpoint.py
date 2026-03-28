@@ -264,8 +264,6 @@ class GestorCheckpoint:
                 if not somente_falhas and status_f1 == StatusExecucao.SUCESSO.value:
                     continue
             else:
-                if status_f1 != StatusExecucao.SUCESSO.value:
-                    continue
                 if somente_falhas and status_f2 != StatusExecucao.ERRO.value:
                     continue
                 if not somente_falhas and status_f2 == StatusExecucao.SUCESSO.value:
@@ -342,6 +340,21 @@ class GestorCheckpoint:
                 return True
             return all(item.get("fase_2") == StatusExecucao.SUCESSO.value for item in elegiveis)
         raise ValueError(f"Fase invalida: {fase}")
+
+    def pode_marcar_itens_completos(
+        self,
+        fase: int | FaseExecucao,
+        indices: list[int],
+    ) -> bool:
+        if not indices:
+            return True
+        fase_execucao = FaseExecucao.from_valor(fase)
+        chave_status = self._chave_status_item(fase_execucao.numero)
+        for indice in indices:
+            item = self.obter_estado_item(indice)
+            if item.get(chave_status) != StatusExecucao.SUCESSO.value:
+                return False
+        return True
 
     def desmarcar_processada(self, fase: int, indice: int) -> None:
         chave = self._chave_fase_topo(fase)

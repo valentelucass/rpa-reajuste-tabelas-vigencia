@@ -16,6 +16,7 @@ CABECALHO_CSV = [
     "run_id",
     "fase",
     "tipo_execucao",
+    "tipo_registro",
     "pagina",
     "linha",
     "nome_tabela",
@@ -32,6 +33,14 @@ CABECALHO_CSV = [
     "screenshot",
     "acao_recomendada",
     "etapa_falha",
+    "grupo_vigencia",
+    "decisao_elegibilidade",
+    "motivo_decisao",
+    "status_site",
+    "assinatura_site",
+    "amostrado",
+    "janela_validacao",
+    "origem_decisao",
 ]
 
 
@@ -53,10 +62,23 @@ class PreparadorArquivosExecucao:
 
     def _inicializar_csv(self) -> None:
         caminho = LOGS_DIR / "processamento.csv"
-        if not caminho.exists():
-            with open(caminho, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=CABECALHO_CSV)
-                writer.writeheader()
+        if caminho.exists():
+            try:
+                with open(caminho, "r", newline="", encoding="utf-8") as arquivo_existente:
+                    reader = csv.reader(arquivo_existente)
+                    cabecalho_atual = next(reader, [])
+                if cabecalho_atual == CABECALHO_CSV:
+                    return
+                caminho_backup = caminho.with_name(
+                    f"{caminho.stem}_schema_antigo_{datetime.now().strftime('%Y%m%d_%H%M%S')}{caminho.suffix}"
+                )
+                caminho.replace(caminho_backup)
+            except Exception:
+                pass
+
+        with open(caminho, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=CABECALHO_CSV)
+            writer.writeheader()
 
     def _inicializar_trace(self) -> None:
         caminho_trace = LOGS_DIR / "execution_trace.json"

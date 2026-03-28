@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from selenium.common.exceptions import InvalidSessionIdException
 
+import config
 from src.monitoramento.observador_execucao import (
     ContratoObservadorExecucao,
 )
@@ -200,6 +201,45 @@ class TestProcessadorFaseDois:
         assert observador.registrar_sucesso.call_count == 1
 
     @patch("src.servicos.processador_fase_dois.time.sleep")
+    def test_continua_ate_o_final_quando_ha_erro_no_meio_do_grupo(self, _sleep):
+        tabelas = [_tabela("T1"), _tabela("T2"), _tabela("T3")]
+        pagina = self._pagina_mock(["T1", "T2", "T3"])
+        pagina.validar_resultado_encontrado.side_effect = [
+            None,
+            RuntimeError("Tabela 'T2' nao encontrada na pesquisa."),
+            None,
+        ]
+
+        aplicador = MagicMock()
+
+        def _aplicar(**kwargs):
+            kwargs["registrar_evento"]("REAJUSTE_APLICADO", "")
+            kwargs["registrar_evento"]("SALVO", "")
+
+        aplicador.aplicar.side_effect = _aplicar
+        observador = _mock_observador()
+        p = self._processador(pagina_tabelas=pagina, aplicador=aplicador, observador=observador)
+
+        relatorio = p.processar(
+            tabelas,
+            [_componente()],
+            run_id="abc",
+            total_estimado=3,
+            filtro_vigencia="01/04/2026 - 31/03/2027",
+            data_inicio="01/04/2026",
+            data_fim="31/03/2027",
+        )
+
+        assert pagina.pesquisar_por_nome.call_args_list[0].args == ("T1",)
+        assert pagina.pesquisar_por_nome.call_args_list[1].args == ("T2",)
+        assert pagina.pesquisar_por_nome.call_args_list[2].args == ("T3",)
+        assert relatorio.total_processadas == 2
+        assert relatorio.total_com_erro == 1
+        assert relatorio.detalhamento[0].status == "SUCESSO"
+        assert relatorio.detalhamento[1].status == "ERRO"
+        assert relatorio.detalhamento[2].status == "SUCESSO"
+
+    @patch("src.servicos.processador_fase_dois.time.sleep")
     def test_gera_logs_obrigatorios_no_relatorio(self, _sleep):
         pagina = self._pagina_mock(["T1"])
         observador = _mock_observador()
@@ -313,6 +353,32 @@ class TestProcessadorFaseDois:
 
         assert relatorio.total_com_erro == 1
         assert "Filtro de vigencia foi perdido apos pesquisar por nome" in relatorio.detalhamento[0].erro
+
+    @patch("src.servicos.processador_fase_dois.time.sleep")
+    def test_respeita_parametro_para_nao_revalidar_antes_de_processar(self, _sleep, monkeypatch):
+        monkeypatch.setattr(config, "FASE2_REVALIDAR_ANTES_DE_PROCESSAR", False)
+        pagina = self._pagina_mock(["T1"])
+        observador = _mock_observador()
+        aplicador = MagicMock()
+        aplicador.aplicar.side_effect = (
+            lambda **kwargs: (
+                kwargs["registrar_evento"]("REAJUSTE_APLICADO", "componentes=1"),
+                kwargs["registrar_evento"]("SALVO", "ok"),
+            )
+        )
+        p = self._processador(pagina_tabelas=pagina, aplicador=aplicador, observador=observador)
+
+        relatorio = p.processar(
+            [_tabela("T1")],
+            [_componente()],
+            run_id="abc",
+            total_estimado=1,
+            data_inicio="01/04/2026",
+            data_fim="31/03/2027",
+        )
+
+        assert relatorio.total_processadas == 1
+        pagina.validar_linha_para_reajuste.assert_not_called()
 
     @patch("src.servicos.processador_fase_dois.time.sleep")
     def test_para_quando_sem_tabelas_no_excel(self, _sleep):

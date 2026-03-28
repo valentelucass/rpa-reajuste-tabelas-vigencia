@@ -460,6 +460,74 @@ def test_janela_preserva_logs_de_execucoes_diferentes_da_mesma_tabela():
         app.processEvents()
 
 
+def test_log_de_validacao_fase2_nao_incrementa_contadores_de_processamento():
+    app = _app()
+    janela = JanelaPainelAutomacao()
+
+    try:
+        contexto = ContextoTabelaProcessamento(
+            fase=2,
+            indice=4,
+            nome_tabela="Tabela Validada",
+            dados_extras={
+                "tipo_registro": "validacao",
+                "fase_execucao_ui": "validacao_fase_2",
+                "contabilizar_progresso": False,
+                "decisao_elegibilidade": "elegivel",
+                "motivo_decisao": "Item confirmado no site",
+                "status_site": "pronto_para_fase_2",
+                "status_ui": "Validado",
+            },
+        )
+
+        janela._ao_sucesso(contexto, "Elegivel na validacao do site")
+
+        entrada = janela._gerenciador_logs.pagina_atual()[0]
+        assert entrada.tipo_registro == "validacao"
+        assert entrada.fase_execucao == "validacao_fase_2"
+        assert entrada.status == "Validado"
+        assert janela._sucessos_fase_dois == 0
+        assert janela._processados_fase_dois == 0
+    finally:
+        janela.close()
+        app.processEvents()
+
+
+def test_tooltip_de_validacao_exibe_status_site_e_decisao():
+    app = _app()
+    janela = JanelaPainelAutomacao()
+
+    try:
+        janela._gerenciador_logs.adicionar_ou_atualizar(
+            EntradaLog(
+                fase=2,
+                indice=8,
+                nome_tabela="Tabela Divergente",
+                status="Alerta",
+                detalhe="Vigencia divergente no site",
+                fase_execucao="validacao_fase_2",
+                tipo_registro="validacao",
+                decisao_elegibilidade="vigencia_divergente",
+                motivo_decisao="Esperado 01/04/2026 - 31/03/2027",
+                status_site="vigencia_divergente",
+                janela_validacao="amostra_inicial",
+                origem_decisao="site",
+                amostrado=True,
+            )
+        )
+
+        janela._atualizar_tabela_logs()
+
+        item = janela._tabela_logs.item(0, 3)
+        assert item is not None
+        tooltip = item.toolTip()
+        assert "Decisao elegibilidade: Vigencia Divergente" in tooltip
+        assert "Status site: vigencia_divergente" in tooltip
+    finally:
+        janela.close()
+        app.processEvents()
+
+
 def test_parar_automacao_marca_status_como_parando():
     app = _app()
     janela = JanelaPainelAutomacao()

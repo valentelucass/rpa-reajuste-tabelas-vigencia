@@ -31,6 +31,15 @@ class EntradaLog:
     status_fase_2: str = "pendente"
     processo: str = "reajuste_tabelas"
     dados_reprocessamento: dict = field(default_factory=dict)
+    tipo_registro: str = "processamento"
+    decisao_elegibilidade: str = ""
+    motivo_decisao: str = ""
+    status_site: str = ""
+    assinatura_site: str = ""
+    amostrado: bool = False
+    janela_validacao: str = ""
+    origem_decisao: str = ""
+    confirmado_no_site: bool = False
 
     def __post_init__(self) -> None:
         if not self.fase_execucao and self.fase > 0 and self.processo == "auto_delete_clientes":

@@ -79,6 +79,7 @@ LARGURA_COLUNA_ACAO = 136
 PROCESSO_PRINCIPAL = "reajuste_tabelas"
 PROCESSO_AUTO_DELETE = "auto_delete_clientes"
 FASE_EXECUCAO_AUTO_DELETE = "auto_delete"
+FASE_EXECUCAO_VALIDACAO_FASE2 = "validacao_fase_2"
 
 
 class JanelaPainelAutomacao(QMainWindow):
@@ -850,6 +851,7 @@ class JanelaPainelAutomacao(QMainWindow):
         self._combo_filtro_fase.addItem("Todas as fases", None)
         self._combo_filtro_fase.addItem("Fase 1", "fase_1")
         self._combo_filtro_fase.addItem("Fase 2", "fase_2")
+        self._combo_filtro_fase.addItem("Validacao Fase 2", FASE_EXECUCAO_VALIDACAO_FASE2)
         self._combo_filtro_fase.addItem("Auto Delete", FASE_EXECUCAO_AUTO_DELETE)
         self._combo_filtro_fase.currentIndexChanged.connect(self._aplicar_filtros_logs_avancados)
 
@@ -1322,11 +1324,16 @@ class JanelaPainelAutomacao(QMainWindow):
         processo = extras.get("processo", PROCESSO_PRINCIPAL)
         fase_execucao_log = self._fase_execucao_log(contexto, processo)
         status_fase_1, status_fase_2 = self._status_fases_log(contexto, processo)
+        tipo_registro = str(extras.get("tipo_registro", "processamento"))
         detalhe = self._formatar_detalhe_auto_delete(
             (
                 "Auto delete em andamento..."
                 if processo == PROCESSO_AUTO_DELETE
-                else f"Fase {contexto.fase} em andamento..."
+                else (
+                    "Validando elegibilidade da Fase 2 no site..."
+                    if tipo_registro == "validacao"
+                    else f"Fase {contexto.fase} em andamento..."
+                )
             ),
             extras,
         )
@@ -1344,6 +1351,15 @@ class JanelaPainelAutomacao(QMainWindow):
             status_fase_2=status_fase_2,
             processo=processo,
             dados_reprocessamento=extras.get("reprocessamento_dados", {}),
+            tipo_registro=tipo_registro,
+            decisao_elegibilidade=str(extras.get("decisao_elegibilidade", "")),
+            motivo_decisao=str(extras.get("motivo_decisao", "")),
+            status_site=str(extras.get("status_site", "")),
+            assinatura_site=str(extras.get("assinatura_site", "")),
+            amostrado=bool(extras.get("amostrado", False)),
+            janela_validacao=str(extras.get("janela_validacao", "")),
+            origem_decisao=str(extras.get("origem_decisao", "")),
+            confirmado_no_site=bool(extras.get("confirmado_no_site", False)),
         )
         self._gerenciador_logs.adicionar_ou_atualizar(entrada)
         self._atualizar_tabela_logs()
@@ -1364,12 +1380,14 @@ class JanelaPainelAutomacao(QMainWindow):
         processo = extras.get("processo", PROCESSO_PRINCIPAL)
         fase_execucao_log = self._fase_execucao_log(contexto, processo)
         status_fase_1, status_fase_2 = self._status_fases_log(contexto, processo)
+        tipo_registro = str(extras.get("tipo_registro", "processamento"))
+        status_log = str(extras.get("status_ui") or ("Validado" if tipo_registro == "validacao" else "Sucesso"))
         entrada = EntradaLog(
             fase=contexto.fase,
             indice=contexto.indice,
             nome_tabela=contexto.nome_tabela,
             chave=self._chave_log_contexto(contexto),
-            status="Sucesso",
+            status=status_log,
             detalhe=self._formatar_detalhe_auto_delete(
                 mensagem or "Concluido com sucesso",
                 extras,
@@ -1381,8 +1399,21 @@ class JanelaPainelAutomacao(QMainWindow):
             status_fase_2=status_fase_2,
             processo=processo,
             dados_reprocessamento=extras.get("reprocessamento_dados", {}),
+            tipo_registro=tipo_registro,
+            decisao_elegibilidade=str(extras.get("decisao_elegibilidade", "")),
+            motivo_decisao=str(extras.get("motivo_decisao", "")),
+            status_site=str(extras.get("status_site", "")),
+            assinatura_site=str(extras.get("assinatura_site", "")),
+            amostrado=bool(extras.get("amostrado", False)),
+            janela_validacao=str(extras.get("janela_validacao", "")),
+            origem_decisao=str(extras.get("origem_decisao", "")),
+            confirmado_no_site=bool(extras.get("confirmado_no_site", False)),
         )
         self._gerenciador_logs.adicionar_ou_atualizar(entrada)
+
+        if not extras.get("contabilizar_progresso", True):
+            self._atualizar_tabela_logs()
+            return
 
         if processo == PROCESSO_AUTO_DELETE or contexto.fase == 1:
             self._sucessos_fase_um += 1
@@ -1403,6 +1434,7 @@ class JanelaPainelAutomacao(QMainWindow):
         processo = extras.get("processo", PROCESSO_PRINCIPAL)
         fase_execucao_log = self._fase_execucao_log(contexto, processo)
         status_fase_1, status_fase_2 = self._status_fases_log(contexto, processo)
+        tipo_registro = str(extras.get("tipo_registro", "processamento"))
         tipo_erro = extras.get("tipo_erro", "")
         tipo_legivel = extras.get("tipo_erro_legivel", "")
         motivo = extras.get("motivo", mensagem[:200])
@@ -1421,7 +1453,7 @@ class JanelaPainelAutomacao(QMainWindow):
             indice=contexto.indice,
             nome_tabela=contexto.nome_tabela,
             chave=self._chave_log_contexto(contexto),
-            status="Erro",
+            status=str(extras.get("status_ui") or "Erro"),
             detalhe=detalhe,
             tipo_erro=tipo_erro,
             tipo_erro_legivel=tipo_legivel,
@@ -1435,8 +1467,21 @@ class JanelaPainelAutomacao(QMainWindow):
             status_fase_2=status_fase_2,
             processo=processo,
             dados_reprocessamento=extras.get("reprocessamento_dados", {}),
+            tipo_registro=tipo_registro,
+            decisao_elegibilidade=str(extras.get("decisao_elegibilidade", "")),
+            motivo_decisao=str(extras.get("motivo_decisao", "")),
+            status_site=str(extras.get("status_site", "")),
+            assinatura_site=str(extras.get("assinatura_site", "")),
+            amostrado=bool(extras.get("amostrado", False)),
+            janela_validacao=str(extras.get("janela_validacao", "")),
+            origem_decisao=str(extras.get("origem_decisao", "")),
+            confirmado_no_site=bool(extras.get("confirmado_no_site", False)),
         )
         self._gerenciador_logs.adicionar_ou_atualizar(entrada)
+
+        if not extras.get("contabilizar_progresso", True):
+            self._atualizar_tabela_logs()
+            return
 
         if processo == PROCESSO_AUTO_DELETE or contexto.fase == 1:
             self._falhas_fase_um += 1
@@ -1552,6 +1597,8 @@ class JanelaPainelAutomacao(QMainWindow):
             # Coluna Fase
             if entrada.processo == PROCESSO_AUTO_DELETE:
                 texto_fase = "AutoDel" if entrada.fase > 0 else "Sistema"
+            elif entrada.fase_execucao == FASE_EXECUCAO_VALIDACAO_FASE2:
+                texto_fase = "F2 Val." if entrada.fase > 0 else "Sistema"
             else:
                 texto_fase = f"Fase {entrada.fase}" if entrada.fase > 0 else "Sistema"
             item_fase = QTableWidgetItem(texto_fase)
@@ -1560,7 +1607,11 @@ class JanelaPainelAutomacao(QMainWindow):
             item_fase.setToolTip(
                 "Auto Delete Clientes"
                 if entrada.processo == PROCESSO_AUTO_DELETE
-                else "Reajuste de Tabelas"
+                else (
+                    "Pre-validacao de elegibilidade da Fase 2"
+                    if entrada.fase_execucao == FASE_EXECUCAO_VALIDACAO_FASE2
+                    else "Reajuste de Tabelas"
+                )
             )
             self._tabela_logs.setItem(linha_idx, 0, item_fase)
 
@@ -1574,7 +1625,9 @@ class JanelaPainelAutomacao(QMainWindow):
 
             # Coluna Status (com ícone de tipo de erro)
             texto_status = entrada.status
-            if entrada.status == "Sucesso" and entrada.reprocessado:
+            if entrada.tipo_registro == "validacao" and entrada.decisao_elegibilidade:
+                texto_status = self._rotulo_decisao_elegibilidade(entrada.decisao_elegibilidade)
+            elif entrada.status == "Sucesso" and entrada.reprocessado:
                 texto_status = "OK - REPROCESSADO"
             elif entrada.status == "Erro" and entrada.reprocessado:
                 texto_status = "ERRO - REPROCESSADO"
@@ -1599,9 +1652,25 @@ class JanelaPainelAutomacao(QMainWindow):
             tooltip_detalhe = [f"Detalhe: {entrada.detalhe or '-'}"]
             if entrada.motivo:
                 tooltip_detalhe.append(f"Motivo: {entrada.motivo}")
+            if entrada.motivo_decisao:
+                tooltip_detalhe.append(f"Motivo decisao: {entrada.motivo_decisao}")
             if entrada.acao_recomendada:
                 tooltip_detalhe.append(f"Ação recomendada: {entrada.acao_recomendada}")
             tooltip_detalhe.append(f"Processo: {entrada.processo}")
+            if entrada.tipo_registro == "validacao":
+                tooltip_detalhe.append(f"Tipo registro: {entrada.tipo_registro}")
+                tooltip_detalhe.append(
+                    f"Decisao elegibilidade: {self._rotulo_decisao_elegibilidade(entrada.decisao_elegibilidade)}"
+                )
+                tooltip_detalhe.append(f"Status site: {entrada.status_site or '-'}")
+                tooltip_detalhe.append(f"Janela validacao: {entrada.janela_validacao or '-'}")
+                tooltip_detalhe.append(f"Amostrado: {'SIM' if entrada.amostrado else 'NAO'}")
+                tooltip_detalhe.append(f"Origem decisao: {entrada.origem_decisao or '-'}")
+                tooltip_detalhe.append(
+                    f"Confirmado no site: {'SIM' if entrada.confirmado_no_site else 'NAO'}"
+                )
+                if entrada.assinatura_site:
+                    tooltip_detalhe.append(f"Assinatura site: {entrada.assinatura_site}")
             if entrada.processo == PROCESSO_AUTO_DELETE:
                 tooltip_detalhe.append("Execucao: auto_delete")
             else:
@@ -1661,12 +1730,28 @@ class JanelaPainelAutomacao(QMainWindow):
         mapa = {
             "Sucesso": PALETA_CORES["sucesso"],
             "Erro": PALETA_CORES["perigo"],
+            "Validado": PALETA_CORES["primaria"],
+            "Alerta": PALETA_CORES["secundaria"],
             "Processando": PALETA_CORES["secundaria"],
             "Interrompido": PALETA_CORES["perigo"],
             "Parando": PALETA_CORES["perigo"],
             "Sistema": PALETA_CORES["texto_mutado"],
         }
         return mapa.get(status, PALETA_CORES["texto_padrao"])
+
+    @staticmethod
+    def _rotulo_decisao_elegibilidade(decisao: str) -> str:
+        mapa = {
+            "elegivel": "Elegivel",
+            "nao_encontrado_no_site": "Nao Encontrado",
+            "nao_pronto_para_fase_2": "Nao Pronto",
+            "vigencia_divergente": "Vigencia Divergente",
+            "nome_divergente": "Nome Divergente",
+            "duplicado_no_site": "Duplicado",
+            "ja_processado_fase_2": "Ja Processado",
+            "erro_tecnico_validacao": "Erro Validacao",
+        }
+        return mapa.get(decisao, decisao or "-")
 
     def _atualizar_horario(self) -> None:
         self._rotulo_horario.setText(
@@ -1701,6 +1786,9 @@ class JanelaPainelAutomacao(QMainWindow):
         contexto: ContextoTabelaProcessamento,
         processo: str,
     ) -> str:
+        fase_execucao_ui = str(contexto.dados_extras.get("fase_execucao_ui") or "")
+        if fase_execucao_ui:
+            return fase_execucao_ui
         if processo == PROCESSO_AUTO_DELETE:
             return str(
                 contexto.dados_extras.get("fase_execucao_ui") or FASE_EXECUCAO_AUTO_DELETE
@@ -1868,6 +1956,15 @@ class JanelaPainelAutomacao(QMainWindow):
                 "dados_reprocessamento": e.dados_reprocessamento,
                 "status_fase_1": e.status_fase_1,
                 "status_fase_2": e.status_fase_2,
+                "tipo_registro": e.tipo_registro,
+                "decisao_elegibilidade": e.decisao_elegibilidade,
+                "motivo_decisao": e.motivo_decisao,
+                "status_site": e.status_site,
+                "assinatura_site": e.assinatura_site,
+                "amostrado": e.amostrado,
+                "janela_validacao": e.janela_validacao,
+                "origem_decisao": e.origem_decisao,
+                "confirmado_no_site": e.confirmado_no_site,
             })
 
         caminho = Path(caminho_salvar)

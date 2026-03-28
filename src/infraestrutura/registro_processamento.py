@@ -1,5 +1,5 @@
 """
-Modelos do registro estruturado de processamento.
+Modelos do registro estruturado de processamento e validacao.
 """
 
 from dataclasses import dataclass
@@ -14,10 +14,11 @@ class RegistroProcessamento:
     run_id: str
     fase: FaseExecucao
     tipo_execucao: TipoExecucao
+    tipo_registro: str
     pagina: int
     linha: int
     nome_tabela: str
-    status: StatusExecucao
+    status: str | StatusExecucao
     mensagem: str
     timestamp_inicio: str
     timestamp_fim: str
@@ -30,16 +31,26 @@ class RegistroProcessamento:
     screenshot: str = ""
     acao_recomendada: str = ""
     etapa_falha: str = ""
+    grupo_vigencia: str = ""
+    decisao_elegibilidade: str = ""
+    motivo_decisao: str = ""
+    status_site: str = ""
+    assinatura_site: str = ""
+    amostrado: bool = False
+    janela_validacao: str = ""
+    origem_decisao: str = ""
 
     def to_dict(self) -> dict[str, str | int | bool]:
+        status = self.status.value if isinstance(self.status, StatusExecucao) else str(self.status)
         return {
             "run_id": self.run_id,
             "fase": self.fase.value,
             "tipo_execucao": self.tipo_execucao.value,
+            "tipo_registro": self.tipo_registro,
             "pagina": self.pagina,
             "linha": self.linha,
             "nome_tabela": self.nome_tabela,
-            "status": self.status.value,
+            "status": status,
             "mensagem": self.mensagem,
             "timestamp_inicio": self.timestamp_inicio,
             "timestamp_fim": self.timestamp_fim,
@@ -52,6 +63,14 @@ class RegistroProcessamento:
             "screenshot": self.screenshot,
             "acao_recomendada": self.acao_recomendada,
             "etapa_falha": self.etapa_falha,
+            "grupo_vigencia": self.grupo_vigencia,
+            "decisao_elegibilidade": self.decisao_elegibilidade,
+            "motivo_decisao": self.motivo_decisao,
+            "status_site": self.status_site,
+            "assinatura_site": self.assinatura_site,
+            "amostrado": self.amostrado,
+            "janela_validacao": self.janela_validacao,
+            "origem_decisao": self.origem_decisao,
         }
 
 

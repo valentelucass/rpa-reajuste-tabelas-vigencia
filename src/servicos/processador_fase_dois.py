@@ -4,6 +4,7 @@ Percorre as tabelas da Aba 1 do Excel em ordem, sob o filtro de vigencia,
 pesquisando cada nome explicitamente antes de abrir o reajuste.
 """
 
+import config
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import logging
@@ -59,6 +60,7 @@ class RelatorioFaseDois:
     run_id: str
     filtro_vigencia: str
     percentual: float
+    pre_validacao: dict = field(default_factory=dict)
     total_registros_filtrados: int = 0
     total_encontradas: int = 0
     total_processadas: int = 0
@@ -428,7 +430,8 @@ class ProcessadorFaseDois:
 
         # Só marca fase completa se o loop terminou naturalmente (sem parada pelo operador)
         loop_completo = self.observador.validar_continuacao()
-        if checkpoint and loop_completo and checkpoint.pode_marcar_fase_completa(2):
+        indices_planejados = [indice_excel for indice_excel, _ in itens]
+        if checkpoint and loop_completo and checkpoint.pode_marcar_itens_completos(2, indices_planejados):
             checkpoint.marcar_fase_completa(2)
         relatorio.validar_consistencia()
         self.log_estruturado.fase2(
@@ -520,10 +523,17 @@ class ProcessadorFaseDois:
         self.pagina_tabelas.aguardar_resultado_pesquisa()
         self.pagina_tabelas.validar_resultado_encontrado(nome_tabela)
         linha = self.pagina_tabelas.localizar_linha_por_nome_exato(nome_tabela)
-        assinatura = self.pagina_tabelas.validar_linha_para_reajuste(
-            linha,
-            nome_tabela,
-            data_inicio,
-            data_fim,
-        )
+        if config.FASE2_REVALIDAR_ANTES_DE_PROCESSAR:
+            assinatura = self.pagina_tabelas.validar_linha_para_reajuste(
+                linha,
+                nome_tabela,
+                data_inicio,
+                data_fim,
+            )
+        else:
+            assinatura = self.pagina_tabelas.extrair_assinatura_linha(linha)
+            if not assinatura:
+                raise RuntimeError(
+                    f"Tabela '{nome_tabela}' encontrada, mas sem assinatura de linha para abrir o reajuste."
+                )
         return linha, assinatura

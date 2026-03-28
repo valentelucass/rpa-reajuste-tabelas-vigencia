@@ -51,6 +51,13 @@ TIMEOUT=30
 PAGE_LOAD_TIMEOUT=60
 TIMEOUT_COPIA_FINALIZADA=600
 INTERVALO_LOG_PROGRESSO_POPUP=30
+
+# Validacao da Fase 2
+FASE2_VALIDACAO_MODO=estrito
+FASE2_AMOSTRA_INICIAL=5
+FASE2_JANELA_CONFIRMACAO=20
+FASE2_AMOSTRAGEM_DISTRIBUIDA=true
+FASE2_REVALIDAR_ANTES_DE_PROCESSAR=true
 ```
 
 | Variável | Descrição |
@@ -65,6 +72,11 @@ INTERVALO_LOG_PROGRESSO_POPUP=30
 | `PAGE_LOAD_TIMEOUT` | Tempo máximo de carregamento de página |
 | `TIMEOUT_COPIA_FINALIZADA` | Tempo máximo para aguardar duplicação |
 | `INTERVALO_LOG_PROGRESSO_POPUP` | Intervalo dos logs de progresso durante a espera do popup |
+| `FASE2_VALIDACAO_MODO` | `estrito` para validar o grupo inteiro antes de concluir "sem elegíveis" |
+| `FASE2_AMOSTRA_INICIAL` | Quantidade inicial de itens usados na amostragem da Fase 2 |
+| `FASE2_JANELA_CONFIRMACAO` | Janela adicional de confirmação antes da varredura completa |
+| `FASE2_AMOSTRAGEM_DISTRIBUIDA` | `true` para distribuir a amostra ao longo do grupo de vigência |
+| `FASE2_REVALIDAR_ANTES_DE_PROCESSAR` | Mantém revalidação da linha antes do clique de reajuste |
 
 ---
 
@@ -131,7 +143,14 @@ Para cada linha da Aba 1:
 
 ### Fase 2 — Aplicação de reajuste
 
-Para cada cópia criada (filtrada por intervalo de datas):
+Antes de processar, o robô executa uma **pré-validação de elegibilidade no site** por grupo de vigência:
+1. Aplica o filtro de vigência
+2. Faz amostragem inicial dos itens do Excel
+3. Se necessário, executa uma janela de confirmação
+4. Em modo `estrito`, varre o grupo inteiro antes de concluir "sem elegíveis"
+5. Gera uma lista final de itens elegíveis e um relatório das divergências
+
+Depois disso, para cada item elegível:
 1. Localiza a linha pela assinatura textual (resistente a rerenders Vue)
 2. Abre o modal de reajuste
 3. Para cada componente da Aba 2, navega até a aba correta (Taxas / Excessos / Adicionais)
@@ -175,6 +194,7 @@ rpa-tabela-cliente-por-nome/
     │   ├── aplicador_reajuste.py        # Orquestra Fase 2
     │   ├── processador_fase_um.py       # Loop resiliente Fase 1
     │   ├── processador_fase_dois.py     # Loop resiliente Fase 2
+    │   ├── validador_elegibilidade_fase_dois.py  # Pré-validação Excel + site
     │   └── gestor_ocorrencias.py        # CSV + recuperação de erros
     └── ui/
         ├── ui_main.py                   # JanelaPainelAutomacao (QMainWindow)
@@ -193,7 +213,7 @@ Cada execução cria uma pasta `execucoes/<run_id>/`:
 |---------|---------|
 | `execution_trace.json` | Rastreamento de todas as etapas (início, fim, erro) |
 | `current_step.json` | Etapa atual (útil para monitoramento externo) |
-| `processamento.csv` | Registro tabular de cada tabela (fase, status, mensagem, screenshot) |
+| `processamento.csv` | Registro tabular de cada tabela e, agora, também da pré-validação da Fase 2 (decisão de elegibilidade, motivo e status do site) |
 | `reports/errors.log` | Log detalhado de erros com traceback |
 | `screenshots/` | Capturas de tela em caso de erro |
 

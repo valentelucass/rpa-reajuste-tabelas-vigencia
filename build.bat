@@ -11,6 +11,10 @@ set "EXE_NAME=%APP_NAME%.exe"
 set "INSTALLER_SCRIPT=installer\%APP_NAME%.iss"
 set "INSTALLER_DIR=dist\instalador"
 set "INSTALLER_NAME=%APP_NAME%-Setup.exe"
+set "BUILD_TEMP_ROOT="
+set "BUILD_TEMP_WORK="
+set "BUILD_TEMP_DIST="
+set "BUILD_TEMP_APP_DIR="
 set "OVERALL_EXIT_CODE=0"
 set "INSTALLER_OK=0"
 
@@ -52,32 +56,80 @@ if errorlevel 1 (
     endlocal & exit /b 1
 )
 
-%PYTHON_CMD% -m PyInstaller build.spec --clean --noconfirm
+set "BUILD_TEMP_ROOT=%TEMP%\%APP_NAME%-build-%RANDOM%%RANDOM%"
+set "BUILD_TEMP_WORK=%BUILD_TEMP_ROOT%\build"
+set "BUILD_TEMP_DIST=%BUILD_TEMP_ROOT%\dist"
+set "BUILD_TEMP_APP_DIR=%BUILD_TEMP_DIST%\%APP_NAME%"
+
+if exist "%BUILD_TEMP_ROOT%" (
+    rmdir /S /Q "%BUILD_TEMP_ROOT%" >nul 2>&1
+)
+mkdir "%BUILD_TEMP_WORK%" >nul 2>&1
+if errorlevel 1 (
+    echo   Falha ao preparar pasta temporaria do build.
+    endlocal & exit /b 1
+)
+mkdir "%BUILD_TEMP_DIST%" >nul 2>&1
+if errorlevel 1 (
+    echo   Falha ao preparar pasta temporaria do build.
+    endlocal & exit /b 1
+)
+
+echo   Gerando executavel fora do OneDrive em: %BUILD_TEMP_ROOT%
+%PYTHON_CMD% -m PyInstaller build.spec --clean --noconfirm --distpath "%BUILD_TEMP_DIST%" --workpath "%BUILD_TEMP_WORK%"
 
 if %ERRORLEVEL% EQU 0 (
-    if exist .env (
-        copy /Y .env "%DIST_DIR%\.env" >nul
-        echo   .env copiado para %DIST_DIR%\
-    )
-
-    call :resolver_iscc
-    if not defined ISCC_EXE (
-        call :instalar_inno_setup
-        call :resolver_iscc
-    )
-
-    if defined ISCC_EXE (
-        echo   Gerando instalador com Inno Setup...
-        call :gerar_instalador
-        if errorlevel 1 (
-            echo   Falha ao gerar o instalador.
+    if not exist "%BUILD_TEMP_APP_DIR%" (
+        echo   Pasta final do executavel nao encontrada em %BUILD_TEMP_APP_DIR%
+        set "OVERALL_EXIT_CODE=1"
+    ) else (
+        set "COPYDIR_OK=0"
+        for /L %%A in (1,1,5) do (
+            if "!COPYDIR_OK!"=="0" (
+                if exist "%DIST_DIR%" (
+                    rmdir /S /Q "%DIST_DIR%" >nul 2>&1
+                )
+                robocopy "%BUILD_TEMP_APP_DIR%" "%DIST_DIR%" /E /COPY:DAT /R:2 /W:2 /NFL /NDL /NJH /NJS /NP >nul
+                set "ROBO_EXIT=!ERRORLEVEL!"
+                if !ROBO_EXIT! LSS 8 (
+                    set "COPYDIR_OK=1"
+                ) else (
+                    if %%A LSS 5 (
+                        echo   Copia do executavel falhou na tentativa %%A. Tentando novamente...
+                        ping 127.0.0.1 -n 3 >nul
+                    )
+                )
+            )
+        )
+        if not "!COPYDIR_OK!"=="1" (
+            echo   Falha ao copiar o executavel final para %DIST_DIR%
             set "OVERALL_EXIT_CODE=1"
         ) else (
-            set "INSTALLER_OK=1"
-            echo   Instalador em: %INSTALLER_DIR%\%INSTALLER_NAME%
+            if exist .env (
+                copy /Y .env "%DIST_DIR%\.env" >nul
+                echo   .env copiado para %DIST_DIR%\
+            )
+
+            call :resolver_iscc
+            if not defined ISCC_EXE (
+                call :instalar_inno_setup
+                call :resolver_iscc
+            )
+
+            if defined ISCC_EXE (
+                echo   Gerando instalador com Inno Setup...
+                call :gerar_instalador
+                if errorlevel 1 (
+                    echo   Falha ao gerar o instalador.
+                    set "OVERALL_EXIT_CODE=1"
+                ) else (
+                    set "INSTALLER_OK=1"
+                    echo   Instalador em: %INSTALLER_DIR%\%INSTALLER_NAME%
+                )
+            ) else (
+                echo   Inno Setup nao encontrado. Instalador nao gerado.
+            )
         )
-    ) else (
-        echo   Inno Setup nao encontrado. Instalador nao gerado.
     )
 
     echo.
@@ -100,6 +152,12 @@ if %ERRORLEVEL% EQU 0 (
     echo   ERRO no build. Verifique os logs acima.
     echo ============================================
     set "OVERALL_EXIT_CODE=1"
+)
+
+if defined BUILD_TEMP_ROOT (
+    if exist "%BUILD_TEMP_ROOT%" (
+        rmdir /S /Q "%BUILD_TEMP_ROOT%" >nul 2>&1
+    )
 )
 
 endlocal & set "EXIT_CODE=%OVERALL_EXIT_CODE%"
